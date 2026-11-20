@@ -18,44 +18,39 @@ class MultiHeadAttention:
         self.head_dim = self.width // heads
 
     def split_heads(self, x):
-        """TODO-02. Input [B,N,D], return [B,H,N,D/H].
-
-        In this image model D=768, H=12 and D/H=64. Use reshape/transpose.
-        Research the head organization independently. Preserve token order.
-        """
-        # TODO-02 contract: [B,N,D] to [B,H,N,D/H].
-        # Image model: D=768, H=12, D/H=64.
-        B=x.shape[0]
-        x=x.reshape(B,50,12,64).transpose(0,2,1,3)
-        return x 
-        raise NotImplementedError('TODO-02: split the feature axis into heads')
+        """TODO-02. Input [B,N,D], return [B,H,N,D/H]."""
+        # reshape splits the feature axis into (H, D/H), giving [B,N,H,D/H].
+        # The H axis is still behind the token axis at this point, so transpose
+        # (0,2,1,3) moves it forward; only then does each head own its slice.
+        B, N, _ = x.shape
+        return x.reshape(B, N, self.heads, self.head_dim).transpose(0, 2, 1, 3)
 
     def __call__(self, x, causal=False):
-        # Given: stored linear weights use [out,in]. Parameters stay fixed.
+        # Q, K and V live in one [3D,D] matrix. One matmul gives [B,N,3D];
+        # the last axis is then split into three equal parts.
         qkv = x @ self.qkv_weight.T + self.qkv_bias
         q = self.split_heads(qkv[:, :, :self.width])
         k = self.split_heads(qkv[:, :, self.width:2*self.width])
         v = self.split_heads(qkv[:, :, 2*self.width:])
 
-        # TODO-03a: query/key comparisons, scaled by sqrt(head_dim).
-        # q,k,v: [B,H,N,64]. scores must have [B,H,N,N].
-        k_t=k.swapaxes(-1,-2)
-        scores=(q@k_t)/np.float32(np.sqrt(self.head_dim))
+        # TODO-03a: scores = Q K^T / sqrt(head_dim), shape [B,H,N,N].
+        # Cast the scale to float32 explicitly: np.sqrt(int) returns a float64
+        # scalar, which would upgrade the whole array and fail the dtype check.
+        k_t = k.swapaxes(-1, -2)
+        scores = (q @ k_t) / np.float32(np.sqrt(self.head_dim))
 
-        # Given for later text-encoder compatibility. Images use causal=False.
+        # Kept for the text tower; the image encoder always passes causal=False.
         if causal:
             scores = causal_mask(scores)
         coefficients = attention_weights(scores)  # supplied numerical helper
 
-        # TODO-03b: mix value rows using coefficients; then join head outputs.
-        # context: [B,H,N,64], merged: [B,N,D].
-        context=coefficients@v
-        merged=context.transpose(0,2,1,3).reshape(x.shape[0],x.shape[1],self.width)
+        # TODO-03b: mix value rows with the coefficients, then merge the heads
+        # back: [B,H,N,D/H] -> [B,N,H,D/H] -> [B,N,D].
+        context = coefficients @ v
+        merged = context.transpose(0, 2, 1, 3).reshape(x.shape[0], x.shape[1], self.width)
 
-        # TODO-03c: output projection, using out_weight and out_bias.
-        # Return [B,N,D]. Remember the stored linear-weight orientation.
-        update=merged@self.out_weight.T+self.out_bias
-        return update
+        # TODO-03c: output projection. Stored weights are [out,in], so use .T.
+        return merged @ self.out_weight.T + self.out_bias
 
 
 class TransformerBlock:
@@ -70,19 +65,15 @@ class TransformerBlock:
         self.gelu = GELU()
 
     def __call__(self, x, causal=False):
-        # Given: normalize each token and calculate its attention update.
+        # Pre-norm attention branch, then the first residual addition.
         update = self.attention(self.norm1(x), causal=causal)
-        
-        # TODO-04a: first residual addition. Name the result residual.
         residual = x + update
-        # Given: the second Norm and the exact checkpoint activation helper.
+
+        # TODO-04: pre-norm MLP branch, 768 -> 3072 -> 768, exact GELU.
         u = self.norm2(residual)
-        # TODO-04b: MLP = GELU(u @ W1.T + b1) @ W2.T + b2.
-        # hidden: [B,N,3072], mlp_update: [B,N,768] for the image tower.
-        # Return residual + mlp_update. Both residual paths retain [B,N,D].
-        hidden =u@self.fc1_weight.T+self.fc1_bias
-        activated=self.gelu(hidden)
-        mlp_update=activated@self.fc2_weight.T+self.fc2_bias
+        hidden = self.gelu(u @ self.fc1_weight.T + self.fc1_bias)
+        mlp_update = hidden @ self.fc2_weight.T + self.fc2_bias
+
         return residual + mlp_update
 
 
@@ -98,34 +89,28 @@ class ImageEncoder:
         self.projection = weights['visual.proj']  # [768,512], already [in,out]
 
     def patchify(self, images):
-        """TODO-01. [B,3,224,224] -> [B,49,3072].
-
-        Visit patches left to right, then top to bottom. Within a patch, flatten
-        C,H,W in that order. Each 32x32 RGB patch contributes 3*32*32 values.
-        Use reshape/transpose. Do not resize the already-prepared input.
-        """
-        # TODO-01: separate patch-grid axes; reorder; flatten.
-        # Input [B,3,224,224], return [B,49,3072].
-        B=images.shape[0]
-        images=images.reshape(B, 3, 7, 32, 7, 32).transpose(0, 2, 4, 1, 3, 5).reshape(B, 49, 3072)
-        return images
-        raise NotImplementedError('TODO-01: turn each image into 49 patch rows')
+        """TODO-01. [B,3,224,224] -> [B,49,3072]."""
+        # 224 / 32 = 7, so the image is a 7x7 grid of 32x32 patches.
+        # Split the spatial axes into (grid, patch size), move the two grid axes
+        # in front of (C,32,32) with transpose, then flatten the last four axes.
+        # Patch order is row-major; the order inside a patch is C, H, W.
+        B = images.shape[0]
+        patches = images.reshape(B, 3, 7, 32, 7, 32)
+        patches = patches.transpose(0, 2, 4, 1, 3, 5)
+        return patches.reshape(B, 49, 3072)
 
     def embed(self, images):
         patches = self.patchify(images)  # [B,49,3072]
 
-        # TODO-05a: project patches to [B,49,768]. There is no patch bias.
+        # TODO-05: patch projection, no bias on this layer.
         patch_tokens = patches @ self.patch_weight.T
-        #raise NotImplementedError('TODO-05a: apply the supplied patch projection')
 
-        # Given: one supplied CLS row per image.
+        # One CLS row per image, tiled over the batch axis.
         cls = np.tile(self.cls, (images.shape[0], 1, 1))
 
-        # TODO-05b: prepend CLS on the token axis, then add learned positions.
-        # Return [B,50,768]. self.position broadcasts over B.
-        tokens = np.concatenate((cls, patch_tokens), axis=1) + self.position
-        return tokens
-        raise NotImplementedError('TODO-05b: CLS, patch rows and positions')
+        # Prepend CLS on the token axis, then add learned positions.
+        # self.position is [50,768] and broadcasts over the batch axis.
+        return np.concatenate((cls, patch_tokens), axis=1) + self.position
 
     def encode_tokens(self, images):
         """Provided assembly of token input and the 12 blocks; [B,50,768]."""
@@ -136,12 +121,12 @@ class ImageEncoder:
 
     def __call__(self, images):
         """TODO-06. Return one normalized output token [B,512] per image."""
-        tokens = self.encode_tokens(images) 
-        # Select CLS, apply post_norm, and project with self.projection.
-        # [B,50,768] -> [B,768] -> [B,512]. visual.proj is already [in,out].
-        # Name the projected array output. The final unit-vector helper is given.
-        cls=tokens[:, 0, :] 
-        normed=self.post_norm(cls)
-        output=normed@self.projection
-        #raise NotImplementedError('TODO-06: CLS selection, post-Norm and projection')
+        tokens = self.encode_tokens(images)  # [B,50,768]
+
+        # Take the CLS row, apply post norm, then project to 512 dims.
+        # visual.proj is stored [in,out], so it is NOT transposed (unlike the
+        # linear layers above, whose weights are [out,in]).
+        cls = tokens[:, 0, :]
+        output = self.post_norm(cls) @ self.projection
+
         return unit_vector(output)
