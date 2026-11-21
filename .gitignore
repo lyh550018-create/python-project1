@@ -22,3 +22,6 @@ my_tokens.npz
 Thumbs.db
 .vscode/
 .idea/
+
+# Supplied reference outputs (course says not to resubmit reference data)
+assets/reference_outputs.npz

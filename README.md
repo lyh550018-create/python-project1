@@ -14,7 +14,7 @@
 - `runtime.py`、`run.py`、`check.py`：课程提供的加载、运行和检查脚本
 - `config.json`、`weights/manifest.json`：模型结构和权重的校验信息
 - `transformer_steps.py`：课程提供的小型 Transformer 计算演示
-- `assets/`：十张测试图片和参考输出
+- `assets/`：十张测试图片（参考输出 `reference_outputs.npz` 见下）
 - `lecture-demos/`、`practice/`、`PPT-CODE-MAP.txt`、`SOURCE-MANIFEST.json`：课程附件里的课堂示例和说明
 
 `image_encoder.py` 里按 TODO 编号分：
@@ -32,7 +32,12 @@
 
 ## 数据和权重
 
-`weights/image_encoder.npz` 有 312 MB，超过 GitHub 单文件 100 MB 的限制，没有放进仓库。从课程附件复制到 `weights/` 目录下即可，`check.py` 会先按 `manifest.json` 里的 SHA-256 核对这个文件。
+有两个课程提供的文件按作业说明没有放进仓库：
+
+- `weights/image_encoder.npz`（312 MB）：模型参数，超过 GitHub 单文件 100 MB 的限制
+- `assets/reference_outputs.npz`（7.6 MB）：检查用的参考输出
+
+从课程附件把它们复制到对应目录即可。`check.py` 会用 `weights/manifest.json` 和 `assets/manifest.json` 里记录的 SHA-256 校验这两个文件。
 
 ## 运行
 
