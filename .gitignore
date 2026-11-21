@@ -9,8 +9,6 @@ venv/
 .pytest_cache/
 .ipynb_checkpoints/
 
-# Large supplied model weights (312 MB, exceeds GitHub's 100 MB file limit)
-weights/image_encoder.npz
 
 # Local run outputs
 output_tokens.npz

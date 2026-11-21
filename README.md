@@ -32,7 +32,7 @@
 
 ## 数据和权重
 
-`weights/image_encoder.npz` 有 312 MB，超过 GitHub 单文件 100 MB 的限制，没有放进仓库。从课程附件复制到 `weights/` 目录下即可，`check.py` 会先按 `manifest.json` 里的 SHA-256 核对这个文件。
+`weights/image_encoder.npz` 有 312 MB，超过 GitHub 普通文件的 100 MB 限制，所以用 Git LFS 存放。克隆之后执行一次 `git lfs pull` 才能拿到实际文件；如果只想下载这一个文件，在网页上打开 `weights/image_encoder.npz` 点 Download 即可。
 
 `assets/reference_outputs.npz` 已经放在仓库里，`check.py` 用它和计算结果逐阶段比对。
 
